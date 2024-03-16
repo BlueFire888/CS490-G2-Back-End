@@ -4,7 +4,7 @@ from flask_cors import CORS
 from shapely.geometry import Point
 
 app = Flask(__name__)
-CORS(app) 
+CORS(app)
 
 HOST = "localhost"
 USER = "root"
