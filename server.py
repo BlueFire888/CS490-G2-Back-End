@@ -1,15 +1,24 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify,json
 import pymysql
 from flask_cors import CORS 
 from shapely.geometry import Point
+from datetime import datetime, timedelta, timezone
+from flask_jwt_extended import create_access_token,get_jwt,get_jwt_identity, \
+                               unset_jwt_cookies, jwt_required, JWTManager
 
 app = Flask(__name__)
 CORS(app)
 
+#jwt app token management
+app.config["JWT_SECRET_KEY"] = "SecretKey"
+jwt = JWTManager(app)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
+#end of jwt token management
+
 HOST = "localhost"
 USER = "root"
-PASSWORD = "!@Jff05288"
-DB = "CS490"
+PASSWORD = "12abAB@#"
+DB = "backend"
 
 
 @app.route("/inventoryInStock", methods=['GET'])
@@ -132,6 +141,24 @@ def addUser():
     return jsonify(response), 200
 
 
+#Changed by krishna for token based auth
+
+@app.after_request
+def refresh_expiring_jwts(response):
+    try:
+        exp_timestamp = get_jwt()["exp"]
+        now = datetime.now(timezone.utc)
+        target_timestamp = datetime.timestamp(now + timedelta(minutes=30))
+        if target_timestamp > exp_timestamp:
+            access_token = create_access_token(identity=get_jwt_identity())
+            data = response.get_json()
+            if type(data) is dict:
+                data["access_token"] = access_token 
+                response.data = json.dumps(data)
+        return response
+    except (RuntimeError, KeyError):
+        # Case where there is not a valid JWT. Just return the original respone
+        return response
 
 @app.route("/authenticate", methods=['POST'])
 def authenticate():
@@ -151,14 +178,36 @@ def authenticate():
                 'message': 'Incorrect username or password'
             }
             return jsonify(response), 200
-
+    access_token = create_access_token(identity=username)
     response = {
-        'message': 'Authentication successful'
+        'access_token': access_token
     }
     return jsonify(response), 200
 
+#ADDED BY krishna for token based auth
 
+@app.route('/profile', methods=['GET'])
+@jwt_required() #new line, requires token to access /profile
 
+def my_profile():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    userid = data.get('userid')
+    
+    response_body = {
+        "name": "Nagato",
+        "about" :"Hello! I'm a full stack developer that loves python and javascript"
+    }
+
+    return response_body
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    response = jsonify({"msg": "logout successful"})
+    unset_jwt_cookies(response)
+    return response
+
+#END of ADDED BY krishna
 @app.route("/myGarageInv", methods=['GET'])
 def myGarageInv():
     db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
