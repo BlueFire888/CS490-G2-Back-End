@@ -8,7 +8,7 @@ CORS(app)
 
 HOST = "localhost"
 USER = "root"
-PASSWORD = "!@Jff05288"
+PASSWORD = ""
 DB = "CS490"
 
 
@@ -28,6 +28,27 @@ def inventoryInStock():
         if not results:
             return jsonify({"inStockInventory": []})
         return jsonify({"inStockInventory": results})
+    
+
+
+@app.route("/carDetails", methods=['POST'])
+def carDetails():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    carID = data.get('carID')
+    with db.cursor() as cursor:
+        sql = """Select i.vin, c.make, c.model, c.year,
+                        cd.price, cd.exterior_color, cd.interior_color, 
+                        cd.wheel_drive, cd.mileage, cd.transmission, cd.seats
+                FROM inventory i
+                    LEFT JOIN cars c on c.car_id = i.car_id
+                    LEFT JOIN car_details cd on cd.vin = i.vin
+                WHERE car_id = %s;"""
+        cursor.execute(sql, ([carID]))
+        results = cursor.fetchall()
+        if not results:
+            return jsonify({"carDetails": []})
+        return jsonify({"carDetails": results})
     
 
 
@@ -184,7 +205,6 @@ def myGarageAddCar():
     year = data.get('year')
     vin = data.get('vin')
 
-    # Check if username and password is valid
     with db.cursor() as cursor:
         query = """SELECT car_id
                     FROM cars WHERE make = %s AND model = %s AND year = %s"""
@@ -290,6 +310,156 @@ def updateUserInfo():
         'message': 'Successfully updated Customer Information'
     }
     return jsonify(response), 200
+
+
+
+@app.route("/addFavorite", methods=['POST'])
+def addFavorite():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    custID = data.get('custID')
+    make = data.get('make')
+    model = data.get('model')
+    year = data.get('year')
+
+    # Check if username and password is valid
+    with db.cursor() as cursor:
+        query = """SELECT car_id
+                    FROM cars WHERE make = %s AND model = %s AND year = %s"""
+        cursor.execute(query, ([make], [model], [year]))
+        results = cursor.fetchall()
+        if not results:
+            response = {
+                'message': 'Error retrieving car_id'
+            }
+            return jsonify(response), 200
+        carID = results[0][0]
+
+        query = """
+                INSERT INTO favorites (user_id, car_id, insert_date, update_date) VALUES 
+                                    (%s, %s, NOW(), NOW())
+                """
+        cursor.execute(query, (custID, carID))
+        db.commit()
+
+    response = {
+        'message': 'Car added to Favorites'
+    }
+    return jsonify(response), 200
+
+
+
+@app.route("/delFavorite", methods=['POST'])
+def delFavorite():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    custID = data.get('custID')
+    make = data.get('make')
+    model = data.get('model')
+    year = data.get('year')
+
+    # Check if username and password is valid
+    with db.cursor() as cursor:
+        query = """SELECT car_id
+                    FROM cars WHERE make = %s AND model = %s AND year = %s"""
+        cursor.execute(query, ([make], [model], [year]))
+        results = cursor.fetchall()
+        if not results:
+            response = {
+                'message': 'Error retrieving car_id'
+            }
+            return jsonify(response), 200
+        carID = results[0][0]
+
+        query = """
+                DELETE FROM favorites WHERE user_id = %s AND car_id = %s
+                """
+        cursor.execute(query, (custID, carID))
+        db.commit()
+
+    response = {
+        'message': 'Car deleted from Favorites'
+    }
+    return jsonify(response), 200
+
+
+
+
+
+@app.route("/checkCarInInv", methods=['POST'])
+def checkCarInInv():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    vin = data.get('custID')
+
+    # Check if username and password is valid
+    with db.cursor() as cursor:
+        query = """SELECT *
+                    FROM inventory WHERE vin = %s"""
+        cursor.execute(query, ([vin]))
+        results = cursor.fetchall()
+    if not results:
+        response = {
+            'message': '0' #Car not found
+        }
+    else:
+        response = {
+            'message': '1' #Car found
+        }
+    return jsonify(response), 200
+
+
+
+
+@app.route("/scheduleAppt", methods=['POST'])
+def scheduleAppt():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    custID = data.get('custID')
+    datetime = data.get('datetime')
+
+    # Check if username and password is valid
+    with db.cursor() as cursor:
+        query = """
+                INSERT INTO test_drive_appointments (user_id, scheduled_date, status, site_id, insert_date, update_date)
+                                    VALUES (%s, %s, %s, %s, NOW(), NOW())
+                """
+        cursor.execute(query, ([custID], [datetime], 'scheduled', [1]))
+        db.commit()
+
+    response = {
+        'message': 'Appointment Scheduled'
+    }
+    return jsonify(response), 200
+
+
+
+@app.route("/addCard", methods=['POST'])
+def addCard():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    custID = data.get('custID')
+    cardNum = data.get('cardNum')
+    cardHolderName = data.get('cardHolderName')
+    cvc = data.get('cvc')
+    expDate = data.get('expDate')
+
+    # Check if username and password is valid
+    with db.cursor() as cursor:
+        query = """
+                INSERT INTO credit_card_history (user_id, cardholdername, number, sec_code, exp_date, insert_date, update_date)
+                                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                """
+        cursor.execute(query, ([custID], [cardHolderName], [cardNum], [cvc], [expDate]))
+        db.commit()
+
+    response = {
+        'message': 'Card Added'
+    }
+    return jsonify(response), 200
+
+
+
 
 
 if __name__ == "__main__":
