@@ -116,13 +116,26 @@ def addUser():
                 'message': 'Username Already Exists'
             }
             return jsonify(response), 200
+        
+    # Check if phone number already exists
+    with db.cursor() as cursor:
+        query = """SELECT * 
+                    FROM users WHERE phone_number = %s"""
+        cursor.execute(query, ([phone_number]))
+        results = cursor.fetchall()
+        if results:
+            response = {
+                'message': 'Phone Number Already Exists'
+            }
+            return jsonify(response), 200
 
     # get job_id
     with db.cursor() as cursor:
         query = "SELECT * FROM jobs WHERE job_title = %s"
         cursor.execute(query, ([job]))
         results = cursor.fetchall()
-        job_id = results[0][1]
+        print("RESULTS: ", results, " AND I THINK JOB_ID IS: ", results[0][0])
+        job_id = results[0][0]
 
     # insert into users
     with db.cursor() as cursor:
