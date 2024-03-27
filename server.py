@@ -2,9 +2,17 @@ from flask import Flask, request, jsonify
 import pymysql
 from flask_cors import CORS 
 from shapely.geometry import Point
+from datetime import datetime, timedelta, timezone
+from flask_jwt_extended import create_access_token,get_jwt,get_jwt_identity, unset_jwt_cookies, jwt_required, JWTManager
 
 app = Flask(__name__)
 CORS(app)
+
+#jwt app token management
+app.config["JWT_SECRET_KEY"] = "SecretKey"
+jwt = JWTManager(app)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
+#end of jwt token management
 
 HOST = "localhost"
 USER = "root"
@@ -161,11 +169,29 @@ def addUser():
         db.commit()
 
     response = {
-        'message': 'User added successfully'
+        'message': 'User added successfully',
+        'user_id': user_id
     }
     return jsonify(response), 200
 
 
+
+@app.after_request
+def refresh_expiring_jwts(response):
+    try:
+        exp_timestamp = get_jwt()["exp"]
+        now = datetime.now(timezone.utc)
+        target_timestamp = datetime.timestamp(now + timedelta(minutes=30))
+        if target_timestamp > exp_timestamp:
+            access_token = create_access_token(identity=get_jwt_identity())
+            data = response.get_json()
+            if type(data) is dict:
+                data["access_token"] = access_token 
+                response.data = json.dumps(data)
+        return response
+    except (RuntimeError, KeyError):
+        # Case where there is not a valid JWT. Just return the original respone
+        return response
 
 @app.route("/authenticate", methods=['POST'])
 def authenticate():
@@ -174,9 +200,11 @@ def authenticate():
     username = data.get('username')
     password = data.get('password')
 
+    user_id = 0
+
     # Check if username and password is valid
     with db.cursor() as cursor:
-        query = """SELECT * 
+        query = """SELECT user_id
                     FROM authentication WHERE username = %s AND password = %s"""
         cursor.execute(query, ([username], [password]))
         results = cursor.fetchall()
@@ -185,11 +213,39 @@ def authenticate():
                 'message': 'Incorrect username or password'
             }
             return jsonify(response), 200
+        user_id = results[0][0]
+    access_token = create_access_token(identity=username)
 
     response = {
-        'message': 'Authentication successful'
+        'message': 'Authentication successful',
+        'user_id': user_id,
+        'access_token': access_token
     }
     return jsonify(response), 200
+
+
+
+
+@app.route('/profile', methods=['GET'])
+@jwt_required() #new line, requires token to access /profile
+
+def my_profile():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    userid = data.get('userid')
+    
+    response_body = {
+        "name": "Nagato",
+        "about" :"Hello! I'm a full stack developer that loves python and javascript"
+    }
+
+    return response_body
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    response = jsonify({"msg": "logout successful"})
+    unset_jwt_cookies(response)
+    return response
 
 
 
@@ -249,9 +305,9 @@ def carPurchaseHistory():
     db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
     data = request.get_json()
     userID = data.get('userID')
-
+    print("RECEIVED USER ID: ", userID)
     with db.cursor() as cursor:
-        query = """SELECT c.make, c.model, c.year, cs.vin, cs.insert_date, n.price, 
+        query = """SELECT c.make, c.model, c.year, cs.vin, cs.insert_date, n.price, cs.financeOrCash
                     FROM users u
                         LEFT JOIN car_sales cs on cs.user_id = u.user_id
                         LEFT JOIN inventory i on i.vin = cs.vin
@@ -260,13 +316,25 @@ def carPurchaseHistory():
                     WHERE u.user_id = %s"""
         cursor.execute(query, ([userID]))
         results = cursor.fetchall()
+        print("RESULTS for carPurchaseHistory: ", results)
         if not results:
             response = {
                 'message': 'Error retrieving customer car purchases'
             }
             return jsonify(response), 200
+        modified_results = []
+        for i in results:
+            my_dict = {}
+            my_dict["c_make"] = i[0]
+            my_dict["c_model"] = i[1]
+            my_dict["c_year"] = i[2]
+            my_dict["c_vin"] = i[3]
+            my_dict["insert_date"] = i[4]
+            my_dict["negotiation_price"] = i[5]
+            my_dict["financeOrCash"] = i[6]
+            modified_results.append(my_dict)
 
-    return jsonify({"carPurchaseHistory": results})
+    return jsonify({"carPurchaseHistory": modified_results}) # return jsonify({"carPurchaseHistory": results})
 
 
 
@@ -279,9 +347,9 @@ def productPurchaseHistory():
     with db.cursor() as cursor:
         query = """SELECT p.product_name, p.price, p.description, ps.insert_date
                     FROM users u
-                        LEFT JOIN product_sales ps on ps.user_id = u.user_id
+                        LEFT JOIN product_sales ps on ps.customer_id = u.user_id
                         LEFT JOIN products p on p.product_id = ps.product_id
-                    WHERE u.user_id = %s"""
+                    WHERE u.user_id = %s""" # LEFT JOIN product_sales ps on ps.user_id = u.user_id
         cursor.execute(query, ([userID]))
         results = cursor.fetchall()
         if not results:
@@ -289,8 +357,16 @@ def productPurchaseHistory():
                 'message': 'Error retrieving customer product purchases'
             }
             return jsonify(response), 200
+        modified_results = []
+        for i in results:
+            my_dict = {}
+            my_dict["p_name"] = i[0]
+            my_dict["p_price"] = i[1]
+            my_dict["p_description"] = i[2]
+            my_dict["insert_date"] = i[3]
+            modified_results.append(my_dict)
 
-    return jsonify({"productPurchaseHistory": results})
+    return jsonify({"productPurchaseHistory": modified_results}) # return jsonify({"productPurchaseHistory": results})
 
 
 
@@ -397,6 +473,24 @@ def delFavorite():
 
 
 
+@app.route("/favoriteCars", methods=['POST'])
+def favoriteCars():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    userID = data.get('userID')
+    with db.cursor() as cursor:
+        sql = """Select f.car_id, c.make, c.model, c.year, cd.mileage
+                FROM favorites f
+                    LEFT JOIN cars c on c.car_id = f.car_id
+                    LEFT JOIN car_details cd on cd.car_id = f.car_id
+                WHERE f.user_id = %s;"""
+        cursor.execute(sql, ([userID]))
+        results = cursor.fetchall()
+        if not results:
+            return jsonify({"favoriteCars": []})
+        return jsonify({"favoriteCars": results})
+    
+
 
 
 @app.route("/checkCarInInv", methods=['POST'])
@@ -447,6 +541,25 @@ def scheduleAppt():
 
 
 
+@app.route("/availableTestDriveTimes", methods=['POST'])
+def availableTestDriveTimes():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    date = data.get('date')
+    with db.cursor() as cursor:
+        sql = """Select CAST(scheduled_date as time) as [Time]
+                FROM test_drive_appointments
+                WHERE cast(scheduled_date as date) = %s;"""
+        cursor.execute(sql, ([date]))
+        results = cursor.fetchall()
+        if not results:
+            return jsonify({"availableTimes": []})
+        return jsonify({"availableTimes": results})
+    
+
+
+
+
 @app.route("/addCard", methods=['POST'])
 def addCard():
     db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
@@ -470,6 +583,53 @@ def addCard():
         'message': 'Card Added'
     }
     return jsonify(response), 200
+
+
+
+
+@app.route("/myCart", methods=['POST'])
+def myCart():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    userID = data.get('userID')
+    with db.cursor() as cursor:
+        sql = """Select c.product_id, p.product_name, c.quantity, p.price, p.description
+                FROM cart c
+                    LEFT JOIN products p on p.product_id = c.product_id
+                WHERE c.user_id = %s;"""
+        cursor.execute(sql, ([userID]))
+        results = cursor.fetchall()
+        if not results:
+            return jsonify({"myCart": []})
+        return jsonify({"myCart": results})
+    
+
+
+
+@app.route("/changeQuantity", methods=['POST'])
+def changeQuantity():
+    db = pymysql.connect(host=HOST, user=USER, password=PASSWORD, db=DB)
+    data = request.get_json()
+    userID = data.get('userID')
+    quantity = data.get('quantity')
+    productID = data.get('productID')
+    with db.cursor() as cursor:
+        if quantity == 0:
+            query = """DELETE FROM myCart
+                        WHERE product_id = %s AND user_id = %s"""
+            cursor.execute(query, ([productID], [userID]))
+            db.commit()
+            return jsonify({"myCart": "Product deleted from cart"})
+        else:
+            query = """UPDATE myCart
+                        SET quantity = %s
+                        WHERE product_id = %s AND user_id = %s"""
+            cursor.execute(query, ([quantity], [productID], [userID]))
+            db.commit()
+            return jsonify({"myCart": "Product quantity updated"})
+    
+
+
 
 
 
